@@ -6,3 +6,4 @@ requests
 openai   # optional, only if you will use OpenAI
 transformers[sentencepiece]  # optional: for local emotion model if you plan to use HF
 torch>=1.13.0  # if using local HF models (optional)
+gunicorn==20.1.0
