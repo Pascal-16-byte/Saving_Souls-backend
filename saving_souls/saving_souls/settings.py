@@ -138,13 +138,15 @@ CORS_ALLOWED_ORIGINS =['http://localhost:3000']  # React dev server
 
 # REST Framework settings
 REST_FRAMEWORK = {
-    'DEFAULT_AUTHENTICATION_CLASSES': [
-        'rest_framework_simplejwt.authentication.JWTAuthentication',
-    ],
     'DEFAULT_PERMISSION_CLASSES': [
-        'rest_framework.permissions.IsAuthenticated',
+        'rest_framework.permissions.AllowAny',
     ],
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework.authentication.SessionAuthentication',
+        'rest_framework.authentication.BasicAuthentication',
+    ]
 }
+
 
 # Optional: Add a secret key if not present
 SECRET_KEY = 'your-secret-key-here'  # Generate a secure one for production
@@ -156,4 +158,4 @@ HELPLINES = {
 }
 
 # Specify the custom User model
-AUTH_USER_MODEL = 'core.User'
+# AUTH_USER_MODEL = 'core.User'
