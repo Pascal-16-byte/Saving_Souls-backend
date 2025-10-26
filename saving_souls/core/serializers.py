@@ -1,20 +1,18 @@
 from rest_framework import serializers
-from .models import Story, ChatMessage, ModerationLog
+from .models import User, ChatbotSession, Post
 
-class StorySerializer(serializers.ModelSerializer):
+class UserSerializer(serializers.ModelSerializer):
     class Meta:
-        model = Story
-        fields = "__all__"
-        read_only_fields = ("id", "status", "sentiment", "created_at")
+        model = User
+        fields = ['id', 'username', 'country', 'age_confirmed', 'anonymous_handle', 'tier', 'chatbot_sessions', 'consent_given']
+        extra_kwargs = {'password': {'write_only': True}}
 
-class ChatMessageSerializer(serializers.ModelSerializer):
+class ChatbotSessionSerializer(serializers.ModelSerializer):
     class Meta:
-        model = ChatMessage
-        fields = "__all__"
-        read_only_fields = ("id", "sentiment", "created_at")
+        model = ChatbotSession
+        fields = ['id', 'prompt', 'response', 'timestamp']
 
-class ModerationLogSerializer(serializers.ModelSerializer):
+class PostSerializer(serializers.ModelSerializer):
     class Meta:
-        model = ModerationLog
-        fields = "__all__"
-        read_only_fields = ("id", "created_at")
+        model = Post
+        fields = ['id', 'content', 'anonymous', 'created_at']

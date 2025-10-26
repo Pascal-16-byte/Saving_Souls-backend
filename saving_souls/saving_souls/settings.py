@@ -40,6 +40,7 @@ ALLOWED_HOSTS = []
 # Application definition
 
 INSTALLED_APPS = [
+    "core",
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -47,7 +48,6 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     "rest_framework",
-    "core",
     "corsheaders",
 ]
 
@@ -134,7 +134,26 @@ STATIC_URL = 'static/'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOWED_ORIGINS =['http://localhost:3000']  # React dev server
+
+# REST Framework settings
 REST_FRAMEWORK = {
-    "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.AllowAny"],
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
+    ],
 }
+
+# Optional: Add a secret key if not present
+SECRET_KEY = 'your-secret-key-here'  # Generate a secure one for production
+
+# For helplines: Add a dictionary in settings or a model later
+HELPLINES = {
+    'USA': '1-800-273-8255 (National Suicide Prevention Lifeline)',
+    # Add more countries...
+}
+
+# Specify the custom User model
+AUTH_USER_MODEL = 'core.User'

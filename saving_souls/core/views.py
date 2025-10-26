@@ -1,112 +1,87 @@
 from rest_framework.views import APIView
-from rest_framework.decorators import api_view
 from rest_framework.response import Response
-from rest_framework import generics, status
-from .models import Story, ChatMessage, ModerationLog
-from .serializers import StorySerializer, ChatMessageSerializer
-from django.conf import settings
-import os, re, requests
+from rest_framework import status
+from rest_framework.permissions import IsAuthenticated
+from .models import User, ChatbotSession, Post
+from .serializers import UserSerializer, ChatbotSessionSerializer, PostSerializer
+from datetime import timedelta
+from django.utils import timezone
+import requests  # For external moderation if needed
 
-# Simple rule-based "danger" detection (MVP)
-DANGER_KEYWORDS = [
-    "suicide","kill myself","end my life","i can't go on","i cant go on",
-    "worthless","no point","want to die"
-]
+class OnboardingView(APIView):
+    permission_classes = [IsAuthenticated]
 
-def check_danger(text):
-    t = text.lower()
-    for kw in DANGER_KEYWORDS:
-        if kw in t:
-            return True
-    return False
-
-# Optional: call OpenAI for more empathetic reply (set OPENAI_API_KEY in .env)
-USE_OPENAI = os.getenv("USE_OPENAI", "false").lower() == "true"
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-
-def generate_bot_reply(user_text, sentiment_label=None):
-    # Simple default reply
-    reply = f"I hear you. It sounds like you're feeling {sentiment_label or 'upset'}. I'm here to listen."
-    # Optional: use OpenAI for better replies
-    if USE_OPENAI and OPENAI_API_KEY:
-        import openai
-        openai.api_key = OPENAI_API_KEY
-        prompt = f"You are a compassionate, empathetic listener. Respond supportively to: {user_text}"
-        try:
-            res = openai.ChatCompletion.create(
-                model="gpt-4o-mini",  # change if needed
-                messages=[{"role":"user","content":prompt}],
-                temperature=0.7,
-                max_tokens=200
-            )
-            reply = res['choices'][0]['message']['content'].strip()
-        except Exception as e:
-            print("OpenAI error:", e)
-    return reply
-
-class ChatbotAPI(APIView):
     def post(self, request):
-        anon_id = request.data.get("anon_id", "guest")
-        text = request.data.get("message", "")
-        if not text:
-            return Response({"error":"message required"}, status=status.HTTP_400_BAD_REQUEST)
+        user = request.user
+        serializer = UserSerializer(user, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save(consent_given=True)
+            # Generate anonymous handle if not provided
+            if not user.anonymous_handle:
+                user.anonymous_handle = f'anon_{user.id}'
+                user.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-        # (Optional) simple sentiment label: naive
-        sentiment_label = "distressed" if check_danger(text) else "neutral"
+class ChatbotSessionView(APIView):
+    permission_classes = [IsAuthenticated]
 
-        # store user message
-        um = ChatMessage.objects.create(anon_id=anon_id, message=text, role="user", sentiment=sentiment_label)
+    def post(self, request):
+        user = request.user
+        if user.tier < 1 or not user.consent_given:
+            return Response({'error': 'Complete onboarding first'}, status=status.HTTP_403_FORBIDDEN)
+        
+        prompt = request.data.get('prompt', 'Provide a journaling prompt or coping exercise.')
+        response = self.generate_chatbot_response(prompt)  # Implement bot logic
+        
+        session = ChatbotSession.objects.create(user=user, prompt=prompt, response=response)
+        user.chatbot_sessions += 1
+        user.last_session_time = timezone.now()
+        
+        # Tier progression: After 3-7 sessions, or after a cooldown (e.g., 1 day)
+        if user.chatbot_sessions >= 3 and (user.chatbot_sessions <= 7 or (user.last_session_time - timezone.now() > timedelta(days=1))):
+            user.tier = 2
+        user.save()
+        
+        return Response(ChatbotSessionSerializer(session).data)
 
-        # if danger detected, return crisis info immediately
-        if check_danger(text):
-            crisis = {
-                "alert": True,
-                "message": "If you are in immediate danger, please contact local emergency services or a crisis line. Here is a helpline you can try: [insert local helpline]."
-            }
-            bot_text = "I’m really concerned. If you're thinking about harming yourself, please contact your local emergency services right now. Would you like resources?"
-            bm = ChatMessage.objects.create(anon_id=anon_id, message=bot_text, role="bot", sentiment="serious")
-            return Response({"reply": bot_text, "crisis": crisis})
+    def generate_chatbot_response(self, prompt):
+        # Simple rule-based bot (expand with OpenAI API for real use)
+        if 'journal' in prompt.lower():
+            return "Journal prompt: Write about three things you're grateful for today."
+        elif 'coping' in prompt.lower():
+            return "Coping exercise: Practice 4-7-8 breathing: Inhale for 4s, hold for 7s, exhale for 8s."
+        return "Tell me more about how you're feeling."
 
-        # generate a reply
-        bot_reply = generate_bot_reply(text, sentiment_label)
-        bm = ChatMessage.objects.create(anon_id=anon_id, message=bot_reply, role="bot", sentiment=sentiment_label)
-        return Response({"reply": bot_reply, "crisis": False})
+class PostView(APIView):
+    permission_classes = [IsAuthenticated]
 
-# Stories
-class StoryCreateAPI(generics.CreateAPIView):
-    serializer_class = StorySerializer
-    def perform_create(self, serializer):
-        content = serializer.validated_data.get("content", "")
-        # naive moderation: if contains dangerous keywords -> flag and create moderation log
-        severity = 0.0
-        for kw in DANGER_KEYWORDS:
-            if kw in content.lower():
-                severity = 0.95
-                break
-        instance = serializer.save(status="pending") if severity >= 0.5 else serializer.save(status="approved")
-        if severity >= 0.5:
-            ModerationLog.objects.create(story=instance, reason="danger keyword detected", severity=severity)
+    def post(self, request):
+        user = request.user
+        if user.tier < 2:
+            return Response({'error': 'Unlock Tier 2 by completing chatbot sessions'}, status=status.HTTP_403_FORBIDDEN)
+        
+        serializer = PostSerializer(data=request.data)
+        if serializer.is_valid():
+            content = serializer.validated_data['content']
+            if not self.moderate_content(content):
+                return Response({'error': 'Content failed moderation. Please revise.'}, status=status.HTTP_400_BAD_REQUEST)
+            
+            post = serializer.save(user=user, moderated=True, published=True)
+            return Response(PostSerializer(post).data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-class StoryListAPI(generics.ListAPIView):
-    serializer_class = StorySerializer
-    queryset = Story.objects.filter(status="approved").order_by("-created_at")
+    def get(self, request):
+        posts = Post.objects.filter(published=True).order_by('-created_at')
+        return Response(PostSerializer(posts, many=True).data)
 
-@api_view(["POST"])
-def approve_story(request, story_id):
-    try:
-        story = Story.objects.get(id=story_id)
-        story.status = "approved"
-        story.save()
-        return Response({"message": "Story approved"}, status=status.HTTP_200_OK)
-    except Story.DoesNotExist:
-        return Response({"error": "Story not found"}, status=status.HTTP_404_NOT_FOUND)
-
-@api_view(["POST"])
-def reject_story(request, story_id):
-    try:
-        story = Story.objects.get(id=story_id)
-        story.status = "rejected"
-        story.save()
-        return Response({"message": "Story rejected"}, status=status.HTTP_200_OK)
-    except Story.DoesNotExist:
-        return Response({"error": "Story not found"}, status=status.HTTP_404_NOT_FOUND)
+    def moderate_content(self, content):
+        # Basic keyword filter (expand with external API)
+        bad_keywords = ['harm', 'suicide', 'violence']  # Customize
+        if any(word in content.lower() for word in bad_keywords):
+            return False
+        # Example external call (uncomment and add API key)
+        # response = requests.post('https://api.moderatecontent.com/text/', data={'key': 'YOUR_KEY', 'text': content})
+        # if response.json().get('rating_label') == 'adult':
+        #     return False
+        return True
